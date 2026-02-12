@@ -1,4 +1,4 @@
-﻿#include <windows.h>
+#include <windows.h>
 #include <commctrl.h>
 #include <shlobj.h>
 #include <stdio.h>
@@ -20,12 +20,13 @@ HWND hwnd;
 HWND hListView;
 HWND hAddress;
 HWND hEdit;
-HWND hUp, hRefresh;
+HWND hUp, hRefresh, hSuper;
 HWND hYes, hNo;
 HWND hNDir, hNFile, hDelete, hCopy, hCut, hPaste, hRename;
 HFONT hFont;
 
 char operation = 0;
+char super = 0;
 
 wchar_t browsingPath[FULL_PATH];
 
@@ -106,18 +107,18 @@ BOOL CopyTextToClipboard(const std::wstring& strText) {
 }
 
 void BrowseTo(const wchar_t* path) {
-    if (!*path || wcscmp(path, L"\\??\\") == 0 || wcscmp(path, L"\\\\?\\") == 0 || wcscmp(path, L"\\\\.\\") == 0) {
-        wchar_t buffer[128];
-        DWORD dwResult = GetLogicalDriveStringsW(128, buffer);
+    wchar_t locPath[FULL_PATH];
+    if (!*path || wcscmp(path, L"\\\\?\\") == 0) {
+        DWORD dwResult = GetLogicalDriveStringsW(256, locPath);
         if (dwResult == 0) {
             ErrorMsg(L"GetLogicalDriveStrings", MB_ICONERROR | MB_OK);
             return;
         }
         wcscpy_s(browsingPath, FULL_PATH, path);
-        SetWindowTextW(hAddress, path);
+        SetWindowTextW(hAddress, super ? path + 4 : path);
         ListView_DeleteAllItems(hListView);
-        LVITEMW lvi = { 0 };
-        for (wchar_t* p = buffer; *p; p += wcslen(p) + 1) {
+        for (wchar_t* p = locPath; *p; p += wcslen(p) + 1) {
+            LVITEMW lvi = { 0 };
             SHFILEINFOW sfi = { 0 };
             SHGetFileInfoW(p, FILE_ATTRIBUTE_DIRECTORY, &sfi, sizeof(sfi),
                 SHGFI_USEFILEATTRIBUTES | SHGFI_SYSICONINDEX | SHGFI_SMALLICON);
@@ -128,32 +129,16 @@ void BrowseTo(const wchar_t* path) {
             lvi.iImage = sfi.iIcon;
             ListView_InsertItem(hListView, &lvi);
         }
-        if (!*path) {
-            lvi.mask = LVIF_TEXT;
-
-            lvi.iItem = ListView_GetItemCount(hListView);
-            wchar_t itemName1[] = L"\\??\\";
-            lvi.pszText = itemName1;
-            ListView_InsertItem(hListView, &lvi);
-
-            lvi.iItem = ListView_GetItemCount(hListView);
-            wchar_t itemName2[] = L"\\\\.\\";
-            lvi.pszText = itemName2;
-            ListView_InsertItem(hListView, &lvi);
-        
-            lvi.iItem = ListView_GetItemCount(hListView);
-            wchar_t itemName3[] = L"\\\\?\\";
-            lvi.pszText = itemName3;
-            ListView_InsertItem(hListView, &lvi);
+        return;
+    }
+    if (!super) {
+        DWORD expandLen = ExpandEnvironmentStringsW(path, locPath, FULL_PATH);
+        if (expandLen == 0 || expandLen > FULL_PATH) {
+            ErrorMsg(path, MB_ICONERROR | MB_OK);
+            return;
         }
-        return;
-    }
-    wchar_t locPath[FULL_PATH];
-    DWORD expandLen = ExpandEnvironmentStringsW(path, locPath, FULL_PATH);
-    if (expandLen == 0 || expandLen > FULL_PATH) {
-        ErrorMsg(path, MB_ICONERROR | MB_OK);
-        return;
-    }
+    } else wcscpy_s(locPath, FULL_PATH, path);
+
     DWORD attr = GetFileAttributesW(locPath);
 
     size_t len = wcslen(locPath);
@@ -169,12 +154,12 @@ void BrowseTo(const wchar_t* path) {
 
         if (attr == INVALID_FILE_ATTRIBUTES || !(attr & FILE_ATTRIBUTE_DIRECTORY))
         if (ShellExecuteW(NULL, L"open", locPath, NULL, NULL, SW_SHOWNORMAL) > (HINSTANCE)32) {
-            SetWindowTextW(hAddress, browsingPath);
+            SetWindowTextW(hAddress, super ? browsingPath + 4 : browsingPath);
             return;
         }
         if (locPath[--len] != L':') {
             ErrorMsg(locPath, MB_ICONERROR | MB_OK);
-            SetWindowTextW(hAddress, browsingPath);
+            SetWindowTextW(hAddress, super ? browsingPath + 4 : browsingPath);
             return;
         }
         locPath[len] = L'\0';
@@ -184,18 +169,18 @@ void BrowseTo(const wchar_t* path) {
             if (GetLastError() == 0x26) {
                 locPath[len] = L':';
                 wcscpy_s(browsingPath, FULL_PATH, locPath);
-                SetWindowTextW(hAddress, locPath);
+                SetWindowTextW(hAddress, super ? locPath + 4 : locPath);
 
                 ListView_DeleteAllItems(hListView);
                 return;
             }
             ErrorMsg(locPath, MB_ICONERROR | MB_OK);
-            SetWindowTextW(hAddress, browsingPath);
+            SetWindowTextW(hAddress, super ? browsingPath + 4 : browsingPath);
             return;
         }
         locPath[len] = L':';
         wcscpy_s(browsingPath, FULL_PATH, locPath);
-        SetWindowTextW(hAddress, locPath);
+        SetWindowTextW(hAddress, super ? locPath + 4 : locPath);
 
         ListView_DeleteAllItems(hListView);
         do {
@@ -226,7 +211,7 @@ void BrowseTo(const wchar_t* path) {
     locPath[len] = L'\0';
 
     wcscpy_s(browsingPath, FULL_PATH, locPath);
-    SetWindowTextW(hAddress, locPath);
+    SetWindowTextW(hAddress, super ? locPath + 4 : locPath);
     SetCurrentDirectoryW(locPath);
 
     ListView_DeleteAllItems(hListView);
@@ -420,6 +405,10 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             0, L"BUTTON", NULL, WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
             buttonSpacing * 2 + buttonWidth * 1, buttonSpacing, buttonWidth, buttonHeight,
             hwnd, (HMENU)ID_REFRESH, NULL, NULL);
+        hSuper = CreateWindowExW(
+            0, L"BUTTON", NULL, WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+            buttonSpacing * 3 + buttonWidth * 2, buttonSpacing, buttonWidth, buttonHeight,
+            hwnd, (HMENU)ID_SUPER, NULL, NULL);
 
         hYes = CreateWindowExW(
             0, L"BUTTON", NULL, WS_CHILD | BS_OWNERDRAW,
@@ -493,7 +482,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         RECT rc;
         GetClientRect(hwnd, &rc);
 
-        MoveWindow(hAddress, buttonSpacing * 3 + buttonWidth * 2, buttonSpacing, rc.right - buttonSpacing * 4 - buttonWidth * 2, buttonHeight, TRUE);
+        MoveWindow(hAddress, buttonSpacing * 4 + buttonWidth * 3, buttonSpacing, rc.right - buttonSpacing * 3 - buttonWidth * 1, buttonHeight, TRUE);
         MoveWindow(hEdit, buttonSpacing * 2 + buttonWidth * 1, buttonSpacing * 2 + buttonHeight, rc.right - buttonSpacing * 5 - buttonWidth * 3, buttonHeight, TRUE);
         SetWindowPos(hYes, NULL, rc.right - buttonSpacing - buttonWidth, buttonSpacing * 2 + buttonHeight, 0, 0, SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE);
         SetWindowPos(hNo, NULL, rc.right - buttonSpacing * 2 - buttonWidth * 2, buttonSpacing * 2 + buttonHeight, 0, 0, SWP_NOZORDER | SWP_NOSIZE | SWP_NOACTIVATE);
@@ -599,13 +588,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_COMMAND:
         switch (LOWORD(wParam)) {
         case ID_UP: {
-            if (wcscmp(browsingPath, L"\\??\\")==0 || wcscmp(browsingPath, L"\\\\?\\")==0 || wcscmp(browsingPath, L"\\\\.\\")==0) {
-                BrowseTo(L"");
-                break;
-            }
             wcscpy_s(path, FULL_PATH, browsingPath);
-            int p = 0;
-            for (int i = 1; i < FULL_PATH; i++) {
+            int p = super * 4;
+            for (int i = 1 + super * 4; i < FULL_PATH; i++) {
                 if (path[i-1] == L'\\' && path[i] != L'\0')
                     p = i;
             }
@@ -615,10 +600,32 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
 
         case ID_REFRESH: {
-            GetWindowTextW(hAddress, path, FULL_PATH);
+            if (super) {
+                wcscpy_s(path, FULL_PATH, L"\\\\?\\");
+                GetWindowTextW(hAddress, path + 4, FULL_PATH - 4);
+            } else GetWindowTextW(hAddress, path, FULL_PATH);
             BrowseTo(path);
             break;
         }
+
+        case ID_SUPER:
+            super = 1-super;
+            InvalidateRect(hSuper, NULL, TRUE);
+            if (super) {
+                wcscpy_s(path, FULL_PATH, L"\\\\?\\");
+                wcscat_s(path, FULL_PATH, browsingPath);
+                BrowseTo(path);
+            } else {
+                wcscpy_s(path, FULL_PATH, browsingPath);
+                for (char i = 0;; i++) {
+                    if (i >= 4) {
+                        BrowseTo(path + 4);
+                        break;
+                    }
+                    if (path[i] != L"\\\\?\\"[i]) break;
+                }
+            }
+            break;
 
         case ID_NDIR:
             MoveWindow(hNDir, buttonSpacing, buttonSpacing * 2 + buttonHeight, buttonWidth, buttonHeight, TRUE);
@@ -752,7 +759,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             GetWindowTextW(hEdit, path + len, FULL_PATH - len);
             switch (operation) {
             case 1:
-                wcscat_s(path, FULL_PATH, L"\\");
                 if (!CreateDirectoryW(path, NULL))
                     if (ErrorMsg(path, MB_ICONERROR | MB_OKCANCEL) == IDOK) return 0;
                 break;
@@ -822,7 +828,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             return DefWindowProc(hwnd, msg, wParam, lParam);
         RECT rcClient = pDIS->rcItem;
         
-        // 根据按钮状态决定颜色
         COLORREF bgColor =
             pDIS->itemState & ODS_SELECTED ? 0xF0F0F0 :
             pDIS->itemState & ODS_DISABLED ? 0xC0C0C0 :
@@ -832,11 +837,9 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         FillRect(pDIS->hDC, &rcClient, hBrush);
         DeleteObject(hBrush);
 
-        //// 绘制焦点矩形
-        //if (pDIS->itemState & ODS_FOCUS)
-        //    DrawFocusRect(pDIS->hDC, &rcClient);
-
-        HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(pDIS->CtlID));
+        HICON hIcon = LoadIcon(GetModuleHandle(NULL), MAKEINTRESOURCE(
+            pDIS->CtlID == ID_SUPER ? IDI_SUPERN + super : pDIS->CtlID
+        ));
         DrawIconEx(pDIS->hDC, 0, 0, hIcon, rcClient.right, rcClient.bottom, 0, NULL, DI_NORMAL);
         DestroyIcon(hIcon);
 
